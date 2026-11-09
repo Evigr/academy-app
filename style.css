@@ -128,3 +128,6 @@ input[type=range]::-moz-range-thumb { width: 22px; height: 22px; border-radius: 
 @keyframes fade { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
 .shake { animation: shake .5s; }
 @keyframes shake { 20% { transform: translateX(-6px); } 40% { transform: translateX(6px); } 60% { transform: translateX(-4px); } 80% { transform: translateX(4px); } }
+.trade { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 10px 0; font-size: 14px; line-height: 1.5; }
+.trade + .trade { border-top: 1px dashed var(--line); }
+.trade .r { text-align: right; }

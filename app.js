@@ -220,11 +220,28 @@ function screenHome() {
   </div>
   <div class="gap"></div>
   ${S.pos ? `<section class="card"><h3>Открытая позиция</h3>${posCard()}</section>` : ""}
-  ${S.trades.length ? `<section class="card"><h3>Последние сделки</h3>${S.trades.slice(-5).reverse().map((t) => `<div class="row"><span>${t[1] === "buy" ? "🟢 Купил" : "🔴 Продал"} <span class="mono">${btcf(t[3])}</span></span><span class="mono muted">$${num(t[4])}</span></div>`).join("")}</section>` : ""}
+  ${S.trades.length ? `<section class="card"><h3>Последние сделки</h3><div id="tradesBox">${tradesHTML()}</div></section>` : ""}
   <p class="note">Сравнение «просто держать» — что было бы, если бы вы купили на все $${num(START)} в день старта и ничего не трогали.</p>`);
   bindChart("ch", d);
 }
+/* Покупка: сколько сейчас в плюсе или минусе относительно потраченного. Продажа: сколько получено и что было бы, если бы держал. */
+function tradesHTML() {
+  return S.trades.slice(-8).reverse().map((t) => {
+    const [ts, side, usdAmt, btc, px] = t;
+    const when = new Date(ts).toLocaleString("ru-RU", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+    let right;
+    if (side === "buy") {
+      const pnl = btc * price - usdAmt, p = usdAmt ? (pnl / usdAmt) * 100 : 0;
+      right = `<b class="mono ${cls(pnl)}">${pnl >= 0 ? "+" : ""}${usd(pnl)}</b><br><span class="pill ${cls(pnl)}">${pct(p)}</span>`;
+    } else {
+      const missed = btc * price - usdAmt;
+      right = `<b class="mono">${usd(usdAmt)}</b><br><span class="muted" style="font-size:11px">${missed > 0 ? "держал бы: +" + usd(missed) : "держал бы: " + usd(missed)}</span>`;
+    }
+    return `<div class="trade"><div>${side === "buy" ? "🟢 Купил" : "🔴 Продал"} <span class="mono">${btcf(btc)}</span><br><span class="muted mono" style="font-size:12px">по $${num(px)} · ${when}</span></div><div class="r">${right}</div></div>`;
+  }).join("");
+}
 function updHome() {
+  const tb = $("tradesBox"); if (tb) tb.innerHTML = tradesHTML();
   const eq = totalEquity(price), ch = (eq / START - 1) * 100;
   const set_ = (id, v) => { const e = $(id); if (e) e.textContent = v; };
   set_("hEq", usd(eq)); set_("hCh", pct(ch)); if ($("hCh")) $("hCh").className = "pill " + cls(ch);
