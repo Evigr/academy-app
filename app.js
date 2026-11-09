@@ -76,13 +76,17 @@ async function getJSON(url) {
   if (!r.ok) throw new Error(r.status);
   return r.json();
 }
+const sane = (x) => typeof x === "number" && isFinite(x) && x > 1000 && x < 10000000;
 async function fetchPrice() {
-  try { price = (await getJSON("https://mempool.space/api/v1/prices")).USD; }
-  catch (e) {
-    try { price = parseFloat((await getJSON("https://api.bybit.com/v5/market/tickers?category=spot&symbol=BTCUSDT")).result.list[0].lastPrice); }
-    catch (e2) { return; }
+  let p = NaN;
+  try { p = Number((await getJSON("https://mempool.space/api/v1/prices")).USD); } catch (e) { /* запасной источник ниже */ }
+  if (!sane(p)) {
+    try { p = parseFloat((await getJSON("https://api.bybit.com/v5/market/tickers?category=spot&symbol=BTCUSDT")).result.list[0].lastPrice); } catch (e2) { /* нет курса */ }
   }
+  if (!sane(p)) return false;          // без курса ничего не считаем: старое значение остаётся, нулевое не принимаем
+  price = p;
   if (!S.startPrice) { S.startPrice = price; save(); }
+  return true;
 }
 const RANGES = { "1D": ["15", 96], "7D": ["60", 168], "30D": ["240", 180], "1Y": ["D", 365] };
 async function fetchChart(r) {
@@ -130,6 +134,7 @@ function doSell(btc) {
 }
 function openPos() {
   if (S.pos) return "Позиция уже открыта";
+  if (!sane(price)) return "Курс ещё не загрузился";
   const margin = S.cash * levPct / 100, fee = margin * levX * LEV_FEE;
   if (margin < 10 || margin <= fee) return "Нужно хотя бы $10 свободных денег";
   S.cash -= margin;
@@ -153,17 +158,23 @@ function liquidate(px) {
   if (tab === "lev" || tab === "home") render();
   return r;
 }
+let checking = false;
 async function checkLiquidation() {
-  if (!S.pos) return;
+  if (!S.pos || !sane(price) || !sane(S.pos.entry) || checking) return;   // без курса позицию не трогаем
   const p = S.pos, c = posCalc(p, price);
   if (c.equity <= c.notional * MAINT) return liquidate(price);
   if (Date.now() - lastLiqCheck < 60000) return;
   const since = Math.max(lastLiqCheck, p.ts); lastLiqCheck = Date.now();
+  checking = true;
   try {
-    for (const [, hi, lo] of await fetchCandlesSince(since)) {
+    const candles = await fetchCandlesSince(since);
+    // за время ответа позицию могли закрыть и открыть другую: проверка относится только к той, что запрашивали
+    if (!S.pos || S.pos.ts !== p.ts) return;
+    for (const [, hi, lo] of candles) {
       if ((p.side === "long" && lo <= c.liq) || (p.side === "short" && hi >= c.liq)) return liquidate(c.liq);
     }
   } catch (e) { /* без свечей проверяем только по текущему курсу */ }
+  finally { checking = false; }
 }
 
 /* ---------- график ---------- */
@@ -382,7 +393,7 @@ function screenMore() {
     <div class="row"><span class="muted">Ликвидаций · перезапусков</span><b class="mono">${S.liqs} · ${S.resets}</b></div></section>
   <section class="card"><h3>Счёт</h3><button class="btn ghost" data-act="reset">♻️ Начать заново с $${num(START)}</button>
     <p class="note" style="margin-top:10px">Сделки и позиция сотрутся, уроки и достижения останутся.</p></section>
-  <p class="note">🔔 Напоминалки о цене работают в чате с ботом: команда <span class="mono">/alert 120000</span>.<br>Данные курса: mempool.space и Bybit. Это тренажёр, а не инвестиционный совет.<br><span class="mono">версия 20261110b</span></p>`);
+  <p class="note">🔔 Напоминалки о цене работают в чате с ботом: команда <span class="mono">/alert 120000</span>.<br>Данные курса: mempool.space и Bybit. Это тренажёр, а не инвестиционный совет.<br><span class="mono">версия 20261110c</span></p>`);
   if (!whatif.out) runWhatif();
 }
 function whatifHTML() {
@@ -390,18 +401,25 @@ function whatifHTML() {
   if (!w) return `<p class="note">Считаю…</p>`;
   if (w.err) return `<p class="note down">Не удалось получить цену за этот год. Попробуйте позже.</p>`;
   const now = w.coins * price;
-  return `<div class="row"><span class="muted">1 января ${whatif.year} биткоин стоил</span><b class="mono">$${num(w.then, w.then < 100 ? 2 : 0)}</b></div>
+  return `<div class="row"><span class="muted">${w.date ? w.date.toLocaleDateString("ru-RU", { day: "numeric", month: "long", year: "numeric", timeZone: "UTC" }) : "1 января " + whatif.year} биткоин стоил</span><b class="mono">$${num(w.then, w.then < 100 ? 2 : 0)}</b></div>
     <div class="row"><span class="muted">Вы купили бы</span><b class="mono">${w.coins.toFixed(5)} BTC</b></div>
     <div class="big ${cls(now - whatif.amount)}" style="font-size:28px;margin:10px 0 2px">${usd(now)}</div>
     <div class="sub"><span class="pill ${cls(now - whatif.amount)}">${pct((now / whatif.amount - 1) * 100)}</span> за вложенные ${usd(whatif.amount)}</div>
     <p class="note" style="margin-top:10px">Задним числом всё кажется простым. Тогда никто не знал будущего, а падения на 50–80% по пути были — многие их не пережили.</p>`;
 }
+let whatifSeq = 0;
 async function runWhatif() {
+  const seq = ++whatifSeq, amount = whatif.amount, year = whatif.year;
   whatif.out = null; const el = $("wiOut"); if (el) el.innerHTML = whatifHTML();
+  let out;
   try {
-    const j = await getJSON(`https://mempool.space/api/v1/historical-price?currency=USD&timestamp=${Math.floor(Date.UTC(whatif.year, 0, 1, 12) / 1000)}`);
-    const then = j.prices[0].USD; whatif.out = { then, coins: whatif.amount / then };
-  } catch (e) { whatif.out = { err: true }; }
+    const j = await getJSON(`https://mempool.space/api/v1/historical-price?currency=USD&timestamp=${Math.floor(Date.UTC(year, 0, 1, 12) / 1000)}`);
+    const point = j.prices[0], then = Number(point.USD);
+    if (!(then > 0)) throw new Error("нет цены");
+    out = { then, coins: amount / then, date: point.time ? new Date(point.time * 1000) : null };  // источник отдаёт ближайшую точку — показываем её настоящую дату
+  } catch (e) { out = { err: true }; }
+  if (seq !== whatifSeq) return;       // пока считали, выбрали другой год или сумму
+  whatif.out = out;
   if ($("wiOut")) $("wiOut").innerHTML = whatifHTML();
 }
 
