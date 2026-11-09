@@ -382,7 +382,7 @@ function screenMore() {
     <div class="row"><span class="muted">Ликвидаций · перезапусков</span><b class="mono">${S.liqs} · ${S.resets}</b></div></section>
   <section class="card"><h3>Счёт</h3><button class="btn ghost" data-act="reset">♻️ Начать заново с $${num(START)}</button>
     <p class="note" style="margin-top:10px">Сделки и позиция сотрутся, уроки и достижения останутся.</p></section>
-  <p class="note">🔔 Напоминалки о цене работают в чате с ботом: команда <span class="mono">/alert 120000</span>.<br>Данные курса: mempool.space и Bybit. Это тренажёр, а не инвестиционный совет.</p>`);
+  <p class="note">🔔 Напоминалки о цене работают в чате с ботом: команда <span class="mono">/alert 120000</span>.<br>Данные курса: mempool.space и Bybit. Это тренажёр, а не инвестиционный совет.<br><span class="mono">версия 20261110b</span></p>`);
   if (!whatif.out) runWhatif();
 }
 function whatifHTML() {
