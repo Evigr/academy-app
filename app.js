@@ -4,7 +4,7 @@
 
 const tg = window.Telegram && window.Telegram.WebApp;
 const cloud = !!(tg && tg.initData && tg.isVersionAtLeast && tg.isVersionAtLeast("6.9") && tg.CloudStorage);
-const START = 10000, FEE = 0.001, LEV_FEE = 0.0006, MAINT = 0.005, KEY = "acad_v1";
+const START = 10000, FEE = 0.001, LEV_FEE = 0.0006, MAINT = 0.005, KEY = "acad_v1", VERSION = "20261111a";
 const $ = (id) => document.getElementById(id);
 
 /* ---------- форматирование ---------- */
@@ -23,32 +23,34 @@ let S = fresh();
 let price = 0, price24 = 0, tab = "home", range = "7D", chartData = {}, lastLiqCheck = 0;
 let tradeSide = "buy", levSide = "long", levX = 5, levPct = 25, openLesson = null, quiz = null, whatif = { amount: 1000, year: 2017, out: null };
 
-function save() {
-  S.rev++;
-  const raw = JSON.stringify(S);
-  try { localStorage.setItem(KEY, raw); } catch (e) { /* приватный режим */ }
+/* Каждый режим хранится под своим ключом: на устройстве (localStorage) и в облаке Telegram (до 4096 символов на ключ).
+   Побеждает копия с бо́льшим rev — так телефон и компьютер не затирают друг друга. */
+const cloudTimers = {};
+function storeSave(key, obj, compact) {
+  obj.rev = (obj.rev || 0) + 1;
+  try { localStorage.setItem(key, JSON.stringify(obj)); } catch (e) { /* приватный режим */ }
   if (cloud) {
-    clearTimeout(save.t);
-    save.t = setTimeout(() => {
-      const compact = Object.assign({}, S, { trades: S.trades.slice(-15) });
-      try { tg.CloudStorage.setItem(KEY, JSON.stringify(compact), () => {}); } catch (e) { /* ignore */ }
+    clearTimeout(cloudTimers[key]);
+    cloudTimers[key] = setTimeout(() => {
+      try { tg.CloudStorage.setItem(key, JSON.stringify(compact ? compact(obj) : obj), () => {}); } catch (e) { /* ignore */ }
     }, 600);
   }
 }
-
-function load() {
+function storeLoad(key) {
   return new Promise((resolve) => {
     let local = null;
-    try { local = JSON.parse(localStorage.getItem(KEY)); } catch (e) { /* пусто */ }
+    try { local = JSON.parse(localStorage.getItem(key)); } catch (e) { /* пусто */ }
     if (!cloud) return resolve(local);
     let done = false;
-    const finish = (cloud) => { if (done) return; done = true; resolve(!cloud ? local : !local ? cloud : (cloud.rev > local.rev ? cloud : local)); };
+    const finish = (c) => { if (done) return; done = true; resolve(!c ? local : !local ? c : (c.rev > local.rev ? c : local)); };
     setTimeout(() => finish(null), 1500);
     try {
-      tg.CloudStorage.getItem(KEY, (err, val) => { let c = null; try { c = val ? JSON.parse(val) : null; } catch (e) { /* ignore */ } finish(c); });
+      tg.CloudStorage.getItem(key, (err, val) => { let c = null; try { c = val ? JSON.parse(val) : null; } catch (e) { /* ignore */ } finish(c); });
     } catch (e) { finish(null); }
   });
 }
+function save() { storeSave(KEY, S, (s) => Object.assign({}, s, { trades: s.trades.slice(-15) })); }
+function load() { return storeLoad(KEY); }
 
 /* ---------- Telegram ---------- */
 function haptic(kind) {
@@ -138,18 +140,27 @@ function openPos() {
   const margin = S.cash * levPct / 100, fee = margin * levX * LEV_FEE;
   if (margin < 10 || margin <= fee) return "Нужно хотя бы $10 свободных денег";
   S.cash -= margin;
-  S.pos = { side: levSide, lev: levX, margin: margin - fee, entry: price, ts: Date.now() };
+  // m0 — сколько списали со счёта, fee0 — комиссия открытия (нужны для чека после сделки)
+  S.pos = { side: levSide, lev: levX, margin: margin - fee, entry: price, ts: Date.now(), m0: margin, fee0: fee };
   lastLiqCheck = Date.now(); save();
   return null;
 }
 function closePos(liquidated, atPrice) {
-  const p = S.pos; if (!p) return;
-  const c = posCalc(p, atPrice || price);
-  const back = liquidated ? 0 : Math.max(0, c.equity - c.notional * LEV_FEE);
+  const p = S.pos; if (!p) return null;
+  const px = atPrice || price;
+  if (!sane(px)) return null;              // без курса позицию не закрываем: иначе посчитали бы по нулю
+  const c = posCalc(p, px);
+  const closeFee = liquidated ? 0 : c.notional * LEV_FEE;
+  const back = liquidated ? 0 : Math.max(0, c.equity - closeFee);
+  // у позиций, открытых до появления чеков, сумму списания восстанавливаем из залога после комиссии
+  const m0 = p.m0 || p.margin / (1 - p.lev * LEV_FEE), fee0 = p.fee0 !== undefined ? p.fee0 : m0 - p.margin;
   S.cash += back; S.pos = null;
   if (liquidated) S.liqs++;
   note(); save();
-  return { back, result: back - p.margin };
+  const deal = { side: p.side, lev: p.lev, margin: p.margin, m0, openFee: fee0, closeFee, entry: p.entry, exit: px,
+    openTs: p.ts, ts: Date.now(), liquidated: !!liquidated, pnl: c.pnl, back, result: back - m0 };
+  if (window.onLevClose) try { onLevClose(deal); } catch (e) { console.error(e); }
+  return deal;
 }
 function liquidate(px) {
   const r = closePos(true, px);
@@ -206,13 +217,13 @@ function bindChart(id, data) {
 
 /* ---------- экраны ---------- */
 const view = $("view");
-function set(html) { view.innerHTML = `<div class="fade">${html}</div>`; }
+function set(html) { view.innerHTML = window.quietRender ? `<div>${html}</div>` : `<div class="fade">${html}</div>`; }
 
 function screenHome() {
   const eq = totalEquity(price), ch = (eq / START - 1) * 100;
   const hodl = S.startPrice ? START / S.startPrice * price : START;
   const d = chartData[range];
-  set(`
+  set(`${window.homeBannerHTML ? homeBannerHTML() : ""}
   <section class="card hero">
     <h3>Учебный счёт</h3>
     <div class="big" id="hEq">${usd(eq)}</div>
@@ -302,13 +313,15 @@ function posCard() {
     <div class="row"><span class="muted">Остаток залога</span><span class="mono" id="pEq">${usd(Math.max(0, c.equity))}</span></div>`;
 }
 function screenLev() {
+  if (window.levOverride && levOverride()) return;      // открыт чек или история чеков
+  const extras = window.levExtrasHTML ? levExtrasHTML() : "";
   if (S.pos) {
     set(`<section class="card ${posCalc(S.pos, price).equity < S.pos.margin * .5 ? "warn" : ""}" id="posBox"><h3>Рисковый режим</h3>${posCard()}</section>
     <button class="btn danger" data-act="closepos">Закрыть позицию</button>
-    <p class="note" style="margin-top:12px">Если цена дойдёт до линии ликвидации, залог сгорит целиком — приложение закроет позицию само, даже если вы были не в сети.</p>`);
+    <p class="note" style="margin-top:12px">Если цена дойдёт до линии ликвидации, залог сгорит целиком — приложение закроет позицию само, даже если вы были не в сети.</p>${extras}`);
     return;
   }
-  set(`
+  set(`${window.lastReceiptHTML ? lastReceiptHTML() : ""}
   <section class="card">
     <h3>Торговля с плечом</h3>
     <p class="note" style="margin:0 0 12px">На залог $1 вы управляете позицией на $${levX}. Прибыль растёт в ${levX} раз… и убыток тоже.</p>
@@ -319,7 +332,7 @@ function screenLev() {
     <input type="range" id="rP" min="5" max="100" step="5" value="${levPct}">
   </section>
   <section class="card" id="lPrev"></section>
-  <button class="btn orange" data-act="openpos">Открыть позицию</button>`);
+  <button class="btn orange" data-act="openpos">Открыть позицию</button>${extras}`);
   $("rX").addEventListener("input", (e) => { levX = +e.target.value; updLev(); });
   $("rP").addEventListener("input", (e) => { levPct = +e.target.value; updLev(); });
   updLev();
@@ -390,10 +403,11 @@ function screenMore() {
     <div class="gap"></div><div id="wiOut">${whatifHTML()}</div></section>
   <section class="card"><h3>🏆 Достижения</h3>${achs.map(([ok, t]) => `<div class="ach ${ok ? "" : "off"}"><i>${ok ? "✅" : "▫️"}</i>${t}</div>`).join("")}
     <div class="row"><span class="muted">Лучший результат счёта</span><b class="mono">${usd(Math.max(S.best, eq))}</b></div>
-    <div class="row"><span class="muted">Ликвидаций · перезапусков</span><b class="mono">${S.liqs} · ${S.resets}</b></div></section>
+    <div class="row"><span class="muted">Ликвидаций · перезапусков</span><b class="mono">${S.liqs} · ${S.resets}</b></div>
+    ${window.titlesHTML ? titlesHTML() : ""}</section>
   <section class="card"><h3>Счёт</h3><button class="btn ghost" data-act="reset">♻️ Начать заново с $${num(START)}</button>
     <p class="note" style="margin-top:10px">Сделки и позиция сотрутся, уроки и достижения останутся.</p></section>
-  <p class="note">🔔 Напоминалки о цене работают в чате с ботом: команда <span class="mono">/alert 120000</span>.<br>Данные курса: mempool.space и Bybit. Это тренажёр, а не инвестиционный совет.<br><span class="mono">версия 20261110c</span></p>`);
+  <p class="note">🔔 Напоминалки о цене работают в чате с ботом: команда <span class="mono">/alert 120000</span>.<br>Данные курса: mempool.space и Bybit. Это тренажёр, а не инвестиционный совет.<br><span class="mono">версия ${VERSION}</span></p>`);
   if (!whatif.out) runWhatif();
 }
 function whatifHTML() {
@@ -424,12 +438,19 @@ async function runWhatif() {
 }
 
 /* ---------- отрисовка и события ---------- */
+const SCREENS = { home: () => screenHome(), trade: () => screenTrade(), lev: () => screenLev(), learn: () => screenLearn(), more: () => screenMore() };
+const backHandlers = [];   // режимы добавляют сюда «есть куда вернуться?» для кнопки «Назад» Telegram
 function render() {
   document.querySelectorAll(".tabs button").forEach((b) => b.classList.toggle("on", b.dataset.tab === tab));
-  ({ home: screenHome, trade: screenTrade, lev: screenLev, learn: screenLearn, more: screenMore })[tab]();
-  if (tg && tg.BackButton) { openLesson !== null && tab === "learn" ? tg.BackButton.show() : tg.BackButton.hide(); }
+  (SCREENS[tab] || SCREENS.home)();
+  const canBack = (openLesson !== null && tab === "learn") || backHandlers.some((h) => h.can());
+  if (tg && tg.BackButton) { canBack ? tg.BackButton.show() : tg.BackButton.hide(); }
 }
-function go(t) { tab = t; if (t !== "learn") { openLesson = null; quiz = null; } render(); window.scrollTo(0, 0); haptic(); }
+function go(t) {
+  tab = t; if (t !== "learn") { openLesson = null; quiz = null; }
+  if (window.onTabChange) onTabChange(t);
+  render(); window.scrollTo(0, 0); haptic();
+}
 
 document.addEventListener("click", async (e) => {
   const tb = e.target.closest("[data-tab]"); if (tb) return go(tb.dataset.tab);
@@ -447,7 +468,12 @@ document.addEventListener("click", async (e) => {
     }
     case "lside": levSide = v; return screenLev();
     case "openpos": { const err = openPos(); if (err) { haptic("err"); return toast(err); } haptic("ok"); toast("🎰 Позиция открыта"); return screenLev(); }
-    case "closepos": { const r = closePos(false); haptic("ok"); toast((r.result >= 0 ? "✅ Прибыль " : "Убыток ") + usd(r.result)); return screenLev(); }
+    case "closepos": {
+      if (!S.pos) return screenLev();                       // повторное нажатие: позиция уже закрыта
+      const r = closePos(false);
+      if (!r) { haptic("err"); return toast("Курс ещё не загрузился — позицию закрыть нельзя"); }
+      haptic("ok"); toast((r.result >= 0 ? "✅ Итог +" : "Итог ") + usd(r.result)); return screenLev();
+    }
     case "lesson": openLesson = +v; quiz = null; return render();
     case "lessons": openLesson = null; quiz = null; return render();
     case "answer": return answer(+v);
@@ -462,7 +488,20 @@ document.addEventListener("click", async (e) => {
 });
 async function runWhatifAndRender() { screenMore(); await runWhatif(); }
 
-if (tg && tg.BackButton) tg.BackButton.onClick(() => { openLesson = null; quiz = null; render(); });
+if (tg && tg.BackButton) tg.BackButton.onClick(() => {
+  const h = backHandlers.find((x) => x.can());
+  if (h) h.back(); else { openLesson = null; quiz = null; }
+  render();
+});
+
+// Другая вкладка браузера сохранила основной счёт — подхватываем более свежую копию, а не затираем её
+window.addEventListener("storage", (e) => {
+  if (e.key !== KEY || !e.newValue) return;
+  try {
+    const v = JSON.parse(e.newValue);
+    if (v && v.rev > S.rev) { S = Object.assign(fresh(), v); render(); }
+  } catch (err) { /* ignore */ }
+});
 
 /* ---------- цикл обновления ---------- */
 function tick() {
@@ -473,19 +512,23 @@ function tick() {
 async function poll() {
   await fetchPrice(); tick(); note();
   try { await checkLiquidation(); } catch (e) { /* ignore */ }
+  if (window.modesTick) try { modesTick(); } catch (e) { console.error(e); }
 }
 
-(async function init() {
+// Запуск после загрузки всех скриптов: modes.js подключается после этого файла
+document.addEventListener("DOMContentLoaded", async function init() {
   if (tg) {
     tg.ready(); tg.expand();
     try { tg.setHeaderColor("#0b0e11"); tg.setBackgroundColor("#0b0e11"); tg.setBottomBarColor && tg.setBottomBarColor("#0b0e11"); tg.disableVerticalSwipes && tg.disableVerticalSwipes(); } catch (e) { /* старые версии */ }
   }
   const saved = await load();
   if (saved) S = Object.assign(fresh(), saved);
+  if (window.initModes) await initModes();
   render();
   await Promise.all([fetchPrice(), fetchChart("7D").catch(() => {}), fetchChart("1D").catch(() => {})]);
   if (S.pos) lastLiqCheck = 0;
   await checkLiquidation().catch(() => {});
   tick(); if (tab === "home") screenHome();
+  if (window.modesTick) modesTick();
   setInterval(poll, 10000);
-})();
+});
