@@ -4,7 +4,7 @@
 
 const tg = window.Telegram && window.Telegram.WebApp;
 const cloud = !!(tg && tg.initData && tg.isVersionAtLeast && tg.isVersionAtLeast("6.9") && tg.CloudStorage);
-const START = 10000, FEE = 0.001, LEV_FEE = 0.0006, MAINT = 0.005, KEY = "acad_v1", VERSION = "20261111b";
+const START = 10000, FEE = 0.001, LEV_FEE = 0.0006, MAINT = 0.005, KEY = "acad_v1", VERSION = "20261111c";
 const $ = (id) => document.getElementById(id);
 
 /* ---------- форматирование ---------- */

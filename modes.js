@@ -182,8 +182,9 @@ async function resolveGhost(id, force) {
     const start = Math.floor(g0.closeTs / MIN) * MIN + MIN;          // первая полная минута после закрытия
     const end = Math.floor(g0.at / MIN) * MIN;                        // берём только минуты, целиком попавшие в сутки
     const candles = await fetchKlines("1", start, end);                // свеча t покрывает [t, t+1 мин): t + 1 мин ≤ end
+    // нужна каждая минута окна: в пропущенной мог быть пробит порог, и ликвидация бы потерялась
     const expected = (end - start) / MIN;
-    if (!candles.length || candles.length < expected * 0.95 || candles[candles.length - 1][0] < end - 10 * MIN) throw new Error("история неполная");
+    if (candles.length !== expected || candles.some((c, i) => c[0] !== start + i * MIN)) throw new Error("в истории пропущены минуты");
     outcome = Object.assign(ghostOutcome(g0, candles), { until: end });
   } catch (e) { outcome = null; }
   finally { ghostBusy.delete(id); }
