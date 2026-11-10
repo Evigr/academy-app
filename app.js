@@ -4,7 +4,7 @@
 
 const tg = window.Telegram && window.Telegram.WebApp;
 const cloud = !!(tg && tg.initData && tg.isVersionAtLeast && tg.isVersionAtLeast("6.9") && tg.CloudStorage);
-const START = 10000, FEE = 0.001, LEV_FEE = 0.0006, MAINT = 0.005, KEY = "acad_v1", VERSION = "20261111a";
+const START = 10000, FEE = 0.001, LEV_FEE = 0.0006, MAINT = 0.005, KEY = "acad_v1", VERSION = "20261111b";
 const $ = (id) => document.getElementById(id);
 
 /* ---------- форматирование ---------- */
@@ -24,10 +24,14 @@ let price = 0, price24 = 0, tab = "home", range = "7D", chartData = {}, lastLiqC
 let tradeSide = "buy", levSide = "long", levX = 5, levPct = 25, openLesson = null, quiz = null, whatif = { amount: 1000, year: 2017, out: null };
 
 /* Каждый режим хранится под своим ключом: на устройстве (localStorage) и в облаке Telegram (до 4096 символов на ключ).
-   Побеждает копия с бо́льшим rev — так телефон и компьютер не затирают друг друга. */
+   Побеждает копия с бо́льшим rev — так телефон и компьютер не затирают друг друга.
+   wid — метка конкретной записи: по ней вкладка понимает, что в хранилище уже чужая запись, даже при равном rev. */
 const cloudTimers = {};
+function storedCopy(key) { try { return JSON.parse(localStorage.getItem(key)); } catch (e) { return null; } }
 function storeSave(key, obj, compact) {
-  obj.rev = (obj.rev || 0) + 1;
+  const prev = storedCopy(key);
+  obj.rev = Math.max(obj.rev || 0, (prev && prev.rev) || 0) + 1;
+  obj.wid = Math.random().toString(36).slice(2, 10);
   try { localStorage.setItem(key, JSON.stringify(obj)); } catch (e) { /* приватный режим */ }
   if (cloud) {
     clearTimeout(cloudTimers[key]);
@@ -49,6 +53,14 @@ function storeLoad(key) {
     } catch (e) { finish(null); }
   });
 }
+/* Запись другой вкладки в localStorage, которую эта вкладка ещё не видела (иначе null).
+   Каждое изменение начинаем с неё: две вкладки не затирают сделки друг друга, даже если событие storage ещё не пришло. */
+function storeFresh(key, cur) {
+  const v = storedCopy(key);
+  // равный rev с другой меткой — одновременная запись другой вкладки; меньший rev — старая копия (например, облако новее)
+  return v && v.wid && v.wid !== cur.wid && v.rev >= (cur.rev || 0) ? v : null;
+}
+function pullMain() { const v = storeFresh(KEY, S); if (v) S = Object.assign(fresh(), v); }
 function save() { storeSave(KEY, S, (s) => Object.assign({}, s, { trades: s.trades.slice(-15) })); }
 function load() { return storeLoad(KEY); }
 
@@ -117,6 +129,7 @@ function totalEquity(px) {
 function note() { S.best = Math.max(S.best || START, totalEquity(price)); }
 
 function doBuy(amount) {
+  pullMain();
   amount = Math.min(amount, S.cash);
   if (!price) return "Курс ещё не загрузился";
   if (amount < 1) return "На счёте меньше $1";
@@ -126,6 +139,7 @@ function doBuy(amount) {
   return null;
 }
 function doSell(btc) {
+  pullMain();
   btc = Math.min(btc, S.btc);
   if (!price) return "Курс ещё не загрузился";
   if (btc < 1e-8) return "Нет биткоинов для продажи";
@@ -135,6 +149,7 @@ function doSell(btc) {
   return null;
 }
 function openPos() {
+  pullMain();
   if (S.pos) return "Позиция уже открыта";
   if (!sane(price)) return "Курс ещё не загрузился";
   const margin = S.cash * levPct / 100, fee = margin * levX * LEV_FEE;
@@ -146,6 +161,7 @@ function openPos() {
   return null;
 }
 function closePos(liquidated, atPrice) {
+  pullMain();
   const p = S.pos; if (!p) return null;
   const px = atPrice || price;
   if (!sane(px)) return null;              // без курса позицию не закрываем: иначе посчитали бы по нулю
@@ -171,6 +187,7 @@ function liquidate(px) {
 }
 let checking = false;
 async function checkLiquidation() {
+  pullMain();
   if (!S.pos || !sane(price) || !sane(S.pos.entry) || checking) return;   // без курса позицию не трогаем
   const p = S.pos, c = posCalc(p, price);
   if (c.equity <= c.notional * MAINT) return liquidate(price);
@@ -180,6 +197,7 @@ async function checkLiquidation() {
   try {
     const candles = await fetchCandlesSince(since);
     // за время ответа позицию могли закрыть и открыть другую: проверка относится только к той, что запрашивали
+    pullMain();
     if (!S.pos || S.pos.ts !== p.ts) return;
     for (const [, hi, lo] of candles) {
       if ((p.side === "long" && lo <= c.liq) || (p.side === "short" && hi >= c.liq)) return liquidate(c.liq);
@@ -381,6 +399,7 @@ function screenLesson() {
       <button class="btn orange" data-act="${last ? "lessons" : "next"}">${last ? "🎓 Готово" : "Следующий урок →"}</button>` : ""}`);
 }
 function answer(j) {
+  pullMain();
   const l = window.LESSONS[openLesson], right = j === l.ok;
   quiz = { pick: j };
   if (S.answered[openLesson] === undefined) { S.answered[openLesson] = right ? 1 : 0; if (right) S.score++; }
@@ -481,6 +500,7 @@ document.addEventListener("click", async (e) => {
     case "wa": whatif.amount = +v; await runWhatifAndRender(); return;
     case "wy": whatif.year = +v; await runWhatifAndRender(); return;
     case "reset": return confirmBox("Сбросить счёт до $10 000? Сделки сотрутся, уроки останутся.", () => {
+      pullMain();
       const keep = { lesson: S.lesson, score: S.score, answered: S.answered, liqs: S.liqs, resets: S.resets + 1 };
       S = Object.assign(fresh(), keep, { rev: S.rev, startPrice: price }); save(); toast("♻️ Счёт сброшен"); go("home");
     });
@@ -499,7 +519,7 @@ window.addEventListener("storage", (e) => {
   if (e.key !== KEY || !e.newValue) return;
   try {
     const v = JSON.parse(e.newValue);
-    if (v && v.rev > S.rev) { S = Object.assign(fresh(), v); render(); }
+    if (v && v.wid !== S.wid && v.rev >= S.rev) { S = Object.assign(fresh(), v); render(); }
   } catch (err) { /* ignore */ }
 });
 

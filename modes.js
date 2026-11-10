@@ -26,6 +26,15 @@ const candleCache = {};      // id раунда → свечи (в память;
 const roundLoad = {};        // id раунда → "loading" | "error"
 let nextLock = 0, quietAt = 0;
 
+/* Подхватить режимы, которые другая вкладка сохранила позже нас (см. storeFresh в app.js). */
+function pullModes() {
+  let v;
+  if ((v = storeFresh(K_RC, RC))) RC = v;
+  if ((v = storeFresh(K_GH, GH))) GH = v;
+  if ((v = storeFresh(K_BL, BL))) BL = v;
+  if ((v = storeFresh(K_CH, CH))) CH = v;
+}
+
 /* ---------- общее ---------- */
 const when = (ts) => new Date(ts).toLocaleString("ru-RU", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
 const dayStr = (ts) => new Date(ts).toLocaleDateString("ru-RU", { day: "numeric", month: "long", year: "numeric", timeZone: "UTC" });
@@ -72,6 +81,7 @@ function noLeverage(r) {
 }
 
 window.onLevClose = function (d) {
+  pullModes();
   const r = { id: d.ts.toString(36), side: d.side, lev: d.lev, m0: d.m0, margin: d.margin, openFee: d.openFee, closeFee: d.closeFee,
     entry: d.entry, exit: d.exit, openTs: d.openTs, ts: d.ts, liq: d.liquidated ? 1 : 0, pnl: d.pnl, back: d.back, result: d.result };
   // при ликвидации биржа забирает и то, что осталось от залога: движение + комиссии + этот остаток = весь залог
@@ -170,12 +180,14 @@ async function resolveGhost(id, force) {
   let outcome = null;
   try {
     const start = Math.floor(g0.closeTs / MIN) * MIN + MIN;          // первая полная минута после закрытия
-    const candles = await fetchKlines("1", start, g0.at);
-    const expected = Math.floor((g0.at - start) / MIN);
-    if (candles.length < expected * 0.95 || candles[candles.length - 1][0] < g0.at - 10 * MIN) throw new Error("история неполная");
-    outcome = ghostOutcome(g0, candles);
+    const end = Math.floor(g0.at / MIN) * MIN;                        // берём только минуты, целиком попавшие в сутки
+    const candles = await fetchKlines("1", start, end);                // свеча t покрывает [t, t+1 мин): t + 1 мин ≤ end
+    const expected = (end - start) / MIN;
+    if (!candles.length || candles.length < expected * 0.95 || candles[candles.length - 1][0] < end - 10 * MIN) throw new Error("история неполная");
+    outcome = Object.assign(ghostOutcome(g0, candles), { until: end });
   } catch (e) { outcome = null; }
   finally { ghostBusy.delete(id); }
+  pullModes();
   const g = GH.list.find((x) => x.id === id);        // пока ждали ответ, список могли обновить в другой вкладке
   if (!g || g.st === "done") return;
   if (outcome) { g.twin = outcome; g.st = "done"; g.seen = 0; } else { g.st = "err"; g.errTs = Date.now(); }
@@ -196,7 +208,8 @@ function ghostHTML(g) {
     <div class="row"><span class="muted">По факту</span><b class="mono ${cls(g.actual)}">${sign(g.actual)}</b></div>
     <div class="row"><span class="muted">Если бы подождал сутки</span><b class="mono ${cls(t.result)}">${sign(t.result)}</b></div>
     <p class="note">${t.liq ? `💀 Двойника ликвидировало ${when(t.ts)}: цена дошла до $${num(t.px)}. Хорошо, что вы закрыли.`
-      : `Через сутки курс был $${num(t.px)}. ${better ? "Ожидание принесло бы больше — но это видно только задним числом." : "Вы закрыли вовремя 👍"}`}</p></div>`;
+      : `Через сутки курс был $${num(t.px)}. ${better ? "Ожидание принесло бы больше — но это видно только задним числом." : "Вы закрыли вовремя 👍"}`}</p>
+    ${t.until ? `<p class="note">Проверено по минутным свечам с ${when(Math.floor(g.closeTs / MIN) * MIN + MIN)} до ${when(t.until)} · точность 1 минута</p>` : ""}</div>`;
 }
 
 window.homeBannerHTML = function () {
@@ -519,6 +532,7 @@ window.onTabChange = function (t) {
 /* ---------- кнопки режимов ---------- */
 document.addEventListener("click", async (e) => {
   const el = e.target.closest("[data-act]"); if (!el) return;
+  pullModes();
   const act = el.dataset.act, v = el.dataset.v || "";
   const [slot, arg] = v.split(":");
   switch (act) {
@@ -584,6 +598,7 @@ window.initModes = async function () {
 };
 
 window.modesTick = function () {
+  pullModes();
   evalChallenges();
   for (const g of GH.list) if (g.st !== "done" && Date.now() >= g.at) resolveGhost(g.id);
   if (tab === "games" && !gamesView && Date.now() - quietAt > MIN) { quietAt = Date.now(); window.quietRender = true; render(); window.quietRender = false; }
@@ -595,7 +610,7 @@ window.addEventListener("storage", (e) => {
   if (!map[e.key] || !e.newValue) return;
   try {
     const v = JSON.parse(e.newValue);
-    if (!v || v.rev <= map[e.key]().rev) return;
+    const cur = map[e.key](); if (!v || v.wid === cur.wid || v.rev < cur.rev) return;
     if (e.key === K_RC) RC = v; else if (e.key === K_GH) GH = v; else if (e.key === K_BL) BL = v; else CH = v;
     render();
   } catch (err) { /* ignore */ }
