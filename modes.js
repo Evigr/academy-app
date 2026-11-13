@@ -508,9 +508,13 @@ window.titlesHTML = function () {
    ====================================================================== */
 
 function gamesScreen() {
+  if (gamesView === "lab" && window.labScreen) return labScreen();
   if (gamesView) return roundScreen(gamesView);
   const r = BL.round;
-  set(`<section class="card hero"><h3>🙈 Слепой рынок</h3>
+  set(`${window.labScreen ? `<section class="card lab-card"><h3>🐋 Лаборатория Киткоина</h3>
+    <p class="note" style="margin:0 0 12px">Адрес, подпись, комиссия, блок и подтверждение — за 5–10 минут. Сначала симуляция, потом настоящий перевод учебного токена KIT в тестовой сети.</p>
+    <button class="btn orange" data-act="labopen">Открыть лабораторию</button></section>` : ""}
+  <section class="card hero"><h3>🙈 Слепой рынок</h3>
     <p class="note" style="margin:0 0 12px">Реальные исторические свечи BTC, но дата скрыта. Отдельный счёт $10 000 на каждый раунд: покупайте, продавайте или ждите следующую свечу. В конце — дата, итог и сравнение с «купил и держал».</p>
     ${r && !r.done ? `<button class="btn orange" data-act="bopen">Продолжить раунд · свеча ${r.step + 1}/${ROUND_LEN}</button>`
       : `<div class="chips">${Object.keys(IV).map((k) => `<button class="chip ${blindIv === k ? "on" : ""}" data-act="biv" data-v="${k}">${IV[k].label}</button>`).join("")}</div>

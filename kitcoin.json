@@ -1,0 +1,11 @@
+{
+  "name": "Kitcoin",
+  "symbol": "KIT",
+  "decimals": 18,
+  "totalSupply": "1000000",
+  "address": null,
+  "chainId": 11155111,
+  "network": "Sepolia",
+  "explorer": "https://sepolia.etherscan.io",
+  "rpc": "https://ethereum-sepolia-rpc.publicnode.com"
+}

@@ -146,3 +146,22 @@ input[type=range]::-moz-range-thumb { width: 22px; height: 22px; border-radius: 
 .grid2 .btn { padding: 13px 8px; font-size: 15px; }
 .ch .btn { margin-top: 8px; }
 .ch .progress { margin: 8px 0 6px; }
+
+/* лаборатория Киткоина */
+.lab-card { border-color: rgba(247, 147, 26, .35); background: linear-gradient(180deg, rgba(247, 147, 26, .08), var(--panel)); }
+.sim-badge { display: inline-block; margin-bottom: 10px; padding: 6px 10px; border-radius: 10px; font-size: 12px; font-weight: 600;
+  color: var(--blue); background: rgba(90, 169, 255, .1); border: 1px dashed rgba(90, 169, 255, .45); }
+.steps { display: flex; gap: 6px; }
+.steps span { flex: 1; text-align: center; padding: 6px 0; border-radius: 8px; font-family: var(--mono); font-weight: 700; font-size: 13px;
+  background: rgba(255, 255, 255, .05); color: var(--muted); }
+.steps span.done { background: rgba(46, 229, 157, .15); color: var(--green); }
+.steps span.cur { background: var(--orange); color: #111; }
+.confs { display: flex; gap: 6px; margin: 10px 0 4px; font-size: 18px; }
+.confs i { font-style: normal; }
+.linklike { color: var(--orange); text-decoration: underline; padding: 0; font-size: inherit; }
+.field input.mono { font-family: var(--mono); font-weight: 600; }
+.kit .top .chip { text-decoration: none; white-space: nowrap; }
+.kit a { color: var(--orange); }
+.kit a.btn { display: block; text-align: center; text-decoration: none; box-sizing: border-box; }
+.kit a.btn.ghost { color: var(--text); }
+.kit main { padding-bottom: 30px; }
